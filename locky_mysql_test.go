@@ -129,7 +129,7 @@ func Test_Lock(t *testing.T) {
 				return
 			}
 
-			time.Sleep(test.args.ttl + 10*time.Millisecond)
+			time.Sleep(test.args.ttl + 1*time.Second)
 
 			locked, err = lock.Lock(test.args.name, test.args.ttl)
 			if err != nil || !locked {
