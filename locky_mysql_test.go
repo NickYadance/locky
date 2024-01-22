@@ -3,13 +3,22 @@ package locky
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+	"log"
 	"sync"
 	"testing"
 	"time"
 )
 
 var db *sql.DB
+
+type Lock struct {
+	LockName      string
+	LockOwner     string
+	LockTimestamp int64
+	LockTTL       int64
+}
 
 func init() {
 	d, err := sql.Open("mysql", "root:root@/test")
@@ -21,14 +30,13 @@ func init() {
 }
 
 func Test_NewMysqlDistributedLock(t *testing.T) {
-	db.Exec("drop table if exists custom_lock_table;" +
-		"drop table if exists locky_mysql_distributed_lock")
-
+	dropTables()
 	type args struct {
 		db         *sql.DB
 		table      string
 		ctx        context.Context
 		autoCreate bool
+		owner      string
 	}
 
 	tests := []struct {
@@ -37,8 +45,9 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "empty options", args: args{}, wantErr: true},
-		{name: "default options(autoCreate)", args: args{db: db, autoCreate: true}, wantErr: false},
-		{name: "custom options", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true}, wantErr: false},
+		{name: "autoCreate", args: args{db: db, autoCreate: true}, wantErr: false},
+		{name: "custom table", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true}, wantErr: false},
+		{name: "custom owner", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true, owner: "custom_owner"}, wantErr: false},
 	}
 
 	for _, test := range tests {
@@ -48,6 +57,7 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 				Table:      test.args.table,
 				Ctx:        test.args.ctx,
 				AutoCreate: test.args.autoCreate,
+				Owner:      test.args.owner,
 			})
 
 			if (err != nil) != test.wantErr {
@@ -59,14 +69,15 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 }
 
 func Test_Lock(t *testing.T) {
+	dropTables()
 	lock, _ := NewMysqlDistributedLock(Opt{
 		Db:         db,
 		AutoCreate: true,
 	})
 
 	type args struct {
-		name string
-		ttl  time.Duration
+		lockName string
+		ttl      time.Duration
 	}
 
 	tests := []struct {
@@ -76,10 +87,10 @@ func Test_Lock(t *testing.T) {
 		routine int
 		wantErr bool
 	}{
-		{name: "empty name and duration", args: args{name: "", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
-		{name: "empty duration", args: args{name: "test-lock", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
-		{name: "name and duration", args: args{name: "test-lock0", ttl: time.Second * 3}, lockCnt: 1, routine: 1, wantErr: false},
-		{name: "multi routine(100)", args: args{name: "test-lock1", ttl: time.Second * 3}, lockCnt: 1, routine: 100, wantErr: false},
+		{name: "empty name and duration", args: args{lockName: "", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
+		{name: "empty duration", args: args{lockName: "test-lock", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
+		{name: "single routine", args: args{lockName: "test-lock0", ttl: time.Second * 3}, lockCnt: 1, routine: 1, wantErr: false},
+		{name: "multi routine(100)", args: args{lockName: "test-lock1", ttl: time.Second * 3}, lockCnt: 1, routine: 100, wantErr: false},
 	}
 
 	for _, test := range tests {
@@ -91,7 +102,7 @@ func Test_Lock(t *testing.T) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					locked, err := lock.Lock(test.args.name, test.args.ttl)
+					locked, err := lock.Lock(test.args.lockName, test.args.ttl)
 					if (err != nil) != test.wantErr {
 						t.Errorf("Lock error: %v, wantErr: %v", err, test.wantErr)
 						return
@@ -123,7 +134,7 @@ func Test_Lock(t *testing.T) {
 				return
 			}
 
-			locked, err := lock.Lock(test.args.name, test.args.ttl)
+			locked, err := lock.Lock(test.args.lockName, test.args.ttl)
 			if err != nil || locked {
 				t.Errorf("The lock should be owned by others")
 				return
@@ -131,16 +142,66 @@ func Test_Lock(t *testing.T) {
 
 			time.Sleep(test.args.ttl + 1*time.Second)
 
-			locked, err = lock.Lock(test.args.name, test.args.ttl)
+			lockRowsInDb, err := getLocksFromDB(lock)
+			if err != nil {
+				t.Errorf("Failed to read from db: %v", err)
+				return
+			}
+
+			if len(lockRowsInDb) != test.lockCnt {
+				t.Errorf("Unexpected lock rows in database, expected: %d, actual: %d", test.lockCnt, len(lockRowsInDb))
+				return
+			}
+
+			if test.lockCnt == 1 {
+				lockRow := lockRowsInDb[0]
+				if lockRow.LockName != test.args.lockName {
+					t.Errorf("Unexpected lock name, expected: %s, actual: %s", lockRow.LockName, test.args.lockName)
+					return
+				}
+
+				if lockRow.LockOwner != lock.Owner {
+					t.Errorf("Unexpected lock owner, expected: %s, actual: %s", lockRow.LockOwner, lock.Owner)
+					return
+				}
+			}
+
+			locked, err = lock.Lock(test.args.lockName, test.args.ttl)
 			if err != nil || !locked {
 				t.Errorf("The lock should have been outdated")
 				return
 			}
 
-			if err := lock.Unlock(test.args.name); err != nil {
+			if err := lock.Unlock(test.args.lockName); err != nil {
 				t.Errorf("Failed to unlock: %v", err)
 				return
 			}
 		})
 	}
+}
+
+func dropTables() {
+	_, err := db.Exec(fmt.Sprintf("drop table if exists %s", DefaultTable))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = db.Exec(fmt.Sprintf("drop table if exists %s", "custom_lock_table"))
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func getLocksFromDB(lock *MysqlDistributedLock) ([]Lock, error) {
+	rows, _ := db.Query(fmt.Sprintf("select lock_name, lock_owner, lock_timestamp, lock_ttl from %s", lock.Table))
+	var locks []Lock
+	for rows.Next() {
+		var lock Lock
+		err := rows.Scan(&lock.LockName, &lock.LockOwner, &lock.LockTimestamp, &lock.LockTTL)
+		if err != nil {
+			return nil, err
+		}
+		locks = append(locks, lock)
+	}
+	return locks, nil
 }
