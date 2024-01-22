@@ -1,4 +1,4 @@
-package locky
+package mysql
 
 import (
 	"context"
