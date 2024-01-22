@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type MysqlDistributedLock struct {
+type DistributedLock struct {
 	*Opt
 	lockStat, unlockStat *sql.Stmt
 }
@@ -32,7 +32,7 @@ const (
 	QueryUnlock = "DELETE FROM %s WHERE `lock_name` = ? and `lock_owner` = ?;"
 )
 
-func NewMysqlDistributedLock(opt Opt) (*MysqlDistributedLock, error) {
+func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
 	if err := opt.DefaultAndValidate(); err != nil {
 		return nil, err
 	}
@@ -56,14 +56,14 @@ func NewMysqlDistributedLock(opt Opt) (*MysqlDistributedLock, error) {
 		return nil, err
 	}
 
-	return &MysqlDistributedLock{
+	return &DistributedLock{
 		Opt:        &opt,
 		lockStat:   lockStat,
 		unlockStat: unlockStat,
 	}, nil
 }
 
-func (l *MysqlDistributedLock) Lock(name string, ttl time.Duration) (bool, error) {
+func (l *DistributedLock) Lock(name string, ttl time.Duration) (bool, error) {
 	if err := l.validateName(name); err != nil {
 		return false, err
 	}
@@ -89,7 +89,7 @@ func (l *MysqlDistributedLock) Lock(name string, ttl time.Duration) (bool, error
 	}
 }
 
-func (l *MysqlDistributedLock) Unlock(name string) error {
+func (l *DistributedLock) Unlock(name string) error {
 	if err := l.validateName(name); err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func (l *MysqlDistributedLock) Unlock(name string) error {
 	return err
 }
 
-func (l *MysqlDistributedLock) validateName(name string) error {
+func (l *DistributedLock) validateName(name string) error {
 	if len(name) <= 0 || len(name) > 255 {
 		return errors.New("name len must be between 0-255")
 	}
@@ -106,7 +106,7 @@ func (l *MysqlDistributedLock) validateName(name string) error {
 	return nil
 }
 
-func (l *MysqlDistributedLock) validateTTL(ttl time.Duration) error {
+func (l *DistributedLock) validateTTL(ttl time.Duration) error {
 	if ttl <= 0 {
 		return errors.New("ttl must be non-zero value")
 	}

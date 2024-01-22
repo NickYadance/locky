@@ -192,7 +192,7 @@ func dropTables() {
 	}
 }
 
-func getLocksFromDB(lock *MysqlDistributedLock) ([]Lock, error) {
+func getLocksFromDB(lock *DistributedLock) ([]Lock, error) {
 	rows, _ := db.Query(fmt.Sprintf("select lock_name, lock_owner, lock_timestamp, lock_ttl from %s", lock.Table))
 	var locks []Lock
 	for rows.Next() {
