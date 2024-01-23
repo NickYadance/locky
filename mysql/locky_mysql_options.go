@@ -16,25 +16,26 @@ type Opt struct {
 	Owner      string
 }
 
-func (o *Opt) DefaultAndValidate() error {
+func (o *Opt) Complete() *Opt {
+	if len(o.Table) == 0 {
+		o.Table = DefaultTable
+	}
+	if o.Ctx == nil {
+		o.Ctx = context.Background()
+	}
+	if len(o.Owner) == 0 {
+		o.Owner = generateRandomString(16)
+	}
+	return o
+}
+
+func (o *Opt) Validate() error {
 	if o.Db == nil {
 		return errors.New("invalid db")
 	}
 
-	if len(o.Table) == 0 {
-		o.Table = DefaultTable
-	}
-
 	if len(o.Table) > 255 {
 		return errors.New("table name too long(>255)")
-	}
-
-	if o.Ctx == nil {
-		o.Ctx = context.Background()
-	}
-
-	if len(o.Owner) == 0 {
-		o.Owner = generateRandomString(16)
 	}
 
 	if len(o.Owner) > 255 {

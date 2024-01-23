@@ -33,7 +33,9 @@ const (
 )
 
 func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
-	if err := opt.DefaultAndValidate(); err != nil {
+	opt.Complete()
+
+	if err := opt.Validate(); err != nil {
 		return nil, err
 	}
 
