@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -64,6 +65,10 @@ func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
 }
 
 func (l *DistributedLock) Lock(lockId string, ttl time.Duration) (bool, error) {
+	return l.LockContext(context.TODO(), lockId, ttl)
+}
+
+func (l *DistributedLock) LockContext(ctx context.Context, lockId string, ttl time.Duration) (bool, error) {
 	if err := l.validateLockId(lockId); err != nil {
 		return false, err
 	}
@@ -72,7 +77,7 @@ func (l *DistributedLock) Lock(lockId string, ttl time.Duration) (bool, error) {
 		return false, err
 	}
 
-	res, err := l.lockStat.Exec(lockId, l.Owner, ttl.Seconds())
+	res, err := l.lockStat.ExecContext(ctx, lockId, l.Owner, ttl.Seconds())
 	if err != nil {
 		return false, err
 	}
@@ -90,11 +95,15 @@ func (l *DistributedLock) Lock(lockId string, ttl time.Duration) (bool, error) {
 }
 
 func (l *DistributedLock) Unlock(lockId string) error {
+	return l.UnlockContext(context.TODO(), lockId)
+}
+
+func (l *DistributedLock) UnlockContext(ctx context.Context, lockId string) error {
 	if err := l.validateLockId(lockId); err != nil {
 		return err
 	}
 
-	_, err := l.unlockStat.Exec(lockId, l.Owner)
+	_, err := l.unlockStat.ExecContext(ctx, lockId, l.Owner)
 	return err
 }
 
