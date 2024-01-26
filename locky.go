@@ -5,6 +5,6 @@ import (
 )
 
 type DistributedLock interface {
-	Lock(name string, ttl time.Duration) (bool, error)
-	Unlock(name string) error
+	Lock(lockId string, ttl time.Duration) (bool, error)
+	Unlock(lockId string) error
 }

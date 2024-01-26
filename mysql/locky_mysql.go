@@ -17,19 +17,19 @@ const (
 	DefaultTable = "locky_mysql_distributed_lock"
 	CreateDDL    = "CREATE TABLE if not exists %s" +
 		"( " +
-		"    `lock_name`     VARCHAR(255)    NOT NULL, " +
+		"    `lock_id`     VARCHAR(255)    NOT NULL, " +
 		"    `lock_owner`     VARCHAR(255)    NOT NULL, " +
 		"    `lock_timestamp` BIGINT UNSIGNED NOT NULL, " +
 		"    `lock_ttl`       INT UNSIGNED    NOT NULL, " +
-		"    PRIMARY KEY (`lock_name`) " +
+		"    PRIMARY KEY (`lock_id`) " +
 		") ENGINE = InnoDB " +
 		"  DEFAULT CHARSET = utf8;"
-	QueryLock = "INSERT INTO %s (`lock_name`, `lock_owner`, `lock_timestamp`, `lock_ttl`)" +
+	QueryLock = "INSERT INTO %s (`lock_id`, `lock_owner`, `lock_timestamp`, `lock_ttl`)" +
 		"VALUES (?, ?, UNIX_TIMESTAMP(), ?)" +
 		"ON DUPLICATE KEY UPDATE" +
 		"`lock_timestamp` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_timestamp`), `lock_timestamp`)," +
 		"`lock_ttl` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_ttl`), `lock_ttl`);"
-	QueryUnlock = "DELETE FROM %s WHERE `lock_name` = ? and `lock_owner` = ?;"
+	QueryUnlock = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
 )
 
 func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
@@ -65,8 +65,8 @@ func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
 	}, nil
 }
 
-func (l *DistributedLock) Lock(name string, ttl time.Duration) (bool, error) {
-	if err := l.validateName(name); err != nil {
+func (l *DistributedLock) Lock(lockId string, ttl time.Duration) (bool, error) {
+	if err := l.validateLockId(lockId); err != nil {
 		return false, err
 	}
 
@@ -74,7 +74,7 @@ func (l *DistributedLock) Lock(name string, ttl time.Duration) (bool, error) {
 		return false, err
 	}
 
-	res, err := l.lockStat.Exec(name, l.Owner, ttl.Seconds())
+	res, err := l.lockStat.Exec(lockId, l.Owner, ttl.Seconds())
 	if err != nil {
 		return false, err
 	}
@@ -91,18 +91,18 @@ func (l *DistributedLock) Lock(name string, ttl time.Duration) (bool, error) {
 	}
 }
 
-func (l *DistributedLock) Unlock(name string) error {
-	if err := l.validateName(name); err != nil {
+func (l *DistributedLock) Unlock(lockId string) error {
+	if err := l.validateLockId(lockId); err != nil {
 		return err
 	}
 
-	_, err := l.unlockStat.Exec(name, l.Owner)
+	_, err := l.unlockStat.Exec(lockId, l.Owner)
 	return err
 }
 
-func (l *DistributedLock) validateName(name string) error {
-	if len(name) <= 0 || len(name) > 255 {
-		return errors.New("name len must be between 0-255")
+func (l *DistributedLock) validateLockId(lockId string) error {
+	if len(lockId) <= 0 || len(lockId) > 255 {
+		return errors.New("lockId len must be between 0-255")
 	}
 
 	return nil

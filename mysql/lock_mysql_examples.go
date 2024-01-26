@@ -18,15 +18,15 @@ func exampleLockAndUnlock() {
 		AutoCreate: true,
 	})
 
-	lockName := "lock2024"
-	locked, err := lock.Lock(lockName, 3*time.Second)
+	lockId := "lock2024"
+	locked, err := lock.Lock(lockId, 3*time.Second)
 	if err != nil {
 		panic(err)
 	}
 
 	if locked {
 		defer func() {
-			if err := lock.Unlock(lockName); err != nil {
+			if err := lock.Unlock(lockId); err != nil {
 				log.Println(err)
 			}
 		}()

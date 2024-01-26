@@ -14,7 +14,7 @@ import (
 var db *sql.DB
 
 type Lock struct {
-	LockName      string
+	LockId        string
 	LockOwner     string
 	LockTimestamp int64
 	LockTTL       int64
@@ -76,8 +76,8 @@ func Test_Lock(t *testing.T) {
 	})
 
 	type args struct {
-		lockName string
-		ttl      time.Duration
+		lockId string
+		ttl    time.Duration
 	}
 
 	tests := []struct {
@@ -87,10 +87,10 @@ func Test_Lock(t *testing.T) {
 		routine int
 		wantErr bool
 	}{
-		{name: "empty name and duration", args: args{lockName: "", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
-		{name: "empty duration", args: args{lockName: "test-lock", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
-		{name: "single routine", args: args{lockName: "test-lock0", ttl: time.Second * 3}, lockCnt: 1, routine: 1, wantErr: false},
-		{name: "multi routine(100)", args: args{lockName: "test-lock1", ttl: time.Second * 3}, lockCnt: 1, routine: 100, wantErr: false},
+		{name: "empty name and duration", args: args{lockId: "", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
+		{name: "empty duration", args: args{lockId: "test-lock", ttl: 0}, lockCnt: 0, routine: 1, wantErr: true},
+		{name: "single routine", args: args{lockId: "test-lock0", ttl: time.Second * 3}, lockCnt: 1, routine: 1, wantErr: false},
+		{name: "multi routine(100)", args: args{lockId: "test-lock1", ttl: time.Second * 3}, lockCnt: 1, routine: 100, wantErr: false},
 	}
 
 	for _, test := range tests {
@@ -102,7 +102,7 @@ func Test_Lock(t *testing.T) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					locked, err := lock.Lock(test.args.lockName, test.args.ttl)
+					locked, err := lock.Lock(test.args.lockId, test.args.ttl)
 					if (err != nil) != test.wantErr {
 						t.Errorf("Lock error: %v, wantErr: %v", err, test.wantErr)
 						return
@@ -134,7 +134,7 @@ func Test_Lock(t *testing.T) {
 				return
 			}
 
-			locked, err := lock.Lock(test.args.lockName, test.args.ttl)
+			locked, err := lock.Lock(test.args.lockId, test.args.ttl)
 			if err != nil || locked {
 				t.Errorf("The lock should be owned by others")
 				return
@@ -155,8 +155,8 @@ func Test_Lock(t *testing.T) {
 
 			if test.lockCnt == 1 {
 				lockRow := lockRowsInDb[0]
-				if lockRow.LockName != test.args.lockName {
-					t.Errorf("Unexpected lock name, expected: %s, actual: %s", lockRow.LockName, test.args.lockName)
+				if lockRow.LockId != test.args.lockId {
+					t.Errorf("Unexpected lock name, expected: %s, actual: %s", lockRow.LockId, test.args.lockId)
 					return
 				}
 
@@ -166,13 +166,13 @@ func Test_Lock(t *testing.T) {
 				}
 			}
 
-			locked, err = lock.Lock(test.args.lockName, test.args.ttl)
+			locked, err = lock.Lock(test.args.lockId, test.args.ttl)
 			if err != nil || !locked {
 				t.Errorf("The lock should have been outdated")
 				return
 			}
 
-			if err := lock.Unlock(test.args.lockName); err != nil {
+			if err := lock.Unlock(test.args.lockId); err != nil {
 				t.Errorf("Failed to unlock: %v", err)
 				return
 			}
@@ -193,11 +193,11 @@ func dropTables() {
 }
 
 func getLocksFromDB(lock *DistributedLock) ([]Lock, error) {
-	rows, _ := db.Query(fmt.Sprintf("select lock_name, lock_owner, lock_timestamp, lock_ttl from %s", lock.Table))
+	rows, _ := db.Query(fmt.Sprintf("select lock_id, lock_owner, lock_timestamp, lock_ttl from %s", lock.Table))
 	var locks []Lock
 	for rows.Next() {
 		var lock Lock
-		err := rows.Scan(&lock.LockName, &lock.LockOwner, &lock.LockTimestamp, &lock.LockTTL)
+		err := rows.Scan(&lock.LockId, &lock.LockOwner, &lock.LockTimestamp, &lock.LockTTL)
 		if err != nil {
 			return nil, err
 		}
