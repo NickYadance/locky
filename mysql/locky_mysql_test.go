@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
@@ -33,6 +34,7 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 	type args struct {
 		db         *sql.DB
 		table      string
+		ctx        context.Context
 		autoCreate bool
 		owner      string
 	}
@@ -44,8 +46,8 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 	}{
 		{name: "empty options", args: args{}, wantErr: true},
 		{name: "autoCreate", args: args{db: db, autoCreate: true}, wantErr: false},
-		{name: "custom table", args: args{db: db, table: "custom_lock_table", autoCreate: true}, wantErr: false},
-		{name: "custom owner", args: args{db: db, table: "custom_lock_table", autoCreate: true, owner: "custom_owner"}, wantErr: false},
+		{name: "custom table", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true}, wantErr: false},
+		{name: "custom owner", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true, owner: "custom_owner"}, wantErr: false},
 	}
 
 	for _, test := range tests {
@@ -53,6 +55,7 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 			_, err := NewMysqlDistributedLock(Opt{
 				Db:         test.args.db,
 				Table:      test.args.table,
+				Ctx:        test.args.ctx,
 				AutoCreate: test.args.autoCreate,
 				Owner:      test.args.owner,
 			})

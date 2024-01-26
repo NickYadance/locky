@@ -41,18 +41,19 @@ func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
 
 	db := opt.Db
 	table := opt.Table
+	ctx := opt.Ctx
 	if opt.AutoCreate {
-		if err := autoCreate(db, table); err != nil {
+		if err := autoCreate(ctx, db, table); err != nil {
 			return nil, err
 		}
 	}
 
-	lockStat, err := db.Prepare(fmt.Sprintf(QueryLock, table))
+	lockStat, err := db.PrepareContext(ctx, fmt.Sprintf(QueryLock, table))
 	if err != nil {
 		return nil, err
 	}
 
-	unlockStat, err := db.Prepare(fmt.Sprintf(QueryUnlock, table))
+	unlockStat, err := db.PrepareContext(ctx, fmt.Sprintf(QueryUnlock, table))
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +124,7 @@ func (l *DistributedLock) validateTTL(ttl time.Duration) error {
 	return nil
 }
 
-func autoCreate(db *sql.DB, table string) error {
-	_, err := db.Exec(fmt.Sprintf(CreateDDL, table))
+func autoCreate(ctx context.Context, db *sql.DB, table string) error {
+	_, err := db.ExecContext(ctx, fmt.Sprintf(CreateDDL, table))
 	return err
 }
