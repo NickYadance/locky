@@ -1,7 +1,6 @@
 package mysql
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"math/rand"
@@ -11,7 +10,6 @@ import (
 type Opt struct {
 	Db         *sql.DB
 	Table      string
-	Ctx        context.Context
 	AutoCreate bool
 	Owner      string
 }
@@ -19,9 +17,6 @@ type Opt struct {
 func (o *Opt) Complete() *Opt {
 	if len(o.Table) == 0 {
 		o.Table = DefaultTable
-	}
-	if o.Ctx == nil {
-		o.Ctx = context.Background()
 	}
 	if len(o.Owner) == 0 {
 		o.Owner = generateRandomString(16)
@@ -42,7 +37,7 @@ func (o *Opt) Validate() error {
 		return errors.New("lock owner too long(>255)")
 	}
 
-	if err := o.Db.PingContext(o.Ctx); err != nil {
+	if err := o.Db.Ping(); err != nil {
 		return err
 	}
 
