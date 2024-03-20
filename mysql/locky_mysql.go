@@ -5,13 +5,23 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/nickyadance/locky"
+	"sync"
 	"time"
 )
 
 type DistributedLock struct {
 	*Opt
 	lockStat, unlockStat *sql.Stmt
+	keepAlives           map[string]*locky.KeepAlive
+	donec                chan struct{}
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	mu                   sync.Mutex
+	once                 sync.Once
 }
+
+var _ locky.DistributedLock = &DistributedLock{}
 
 const (
 	DefaultTable = "locky_mysql_distributed_lock"
@@ -29,7 +39,8 @@ const (
 		"ON DUPLICATE KEY UPDATE" +
 		"`lock_timestamp` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_timestamp`), `lock_timestamp`)," +
 		"`lock_ttl` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_ttl`), `lock_ttl`);"
-	QueryUnlock = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
+	QueryUnlock                  = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
+	KeepAliveResponseChannelSize = 16
 )
 
 func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
@@ -58,18 +69,20 @@ func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
 		return nil, err
 	}
 
+	stopCtx, stopCancel := context.WithCancel(ctx)
+
 	return &DistributedLock{
 		Opt:        &opt,
 		lockStat:   lockStat,
 		unlockStat: unlockStat,
+		keepAlives: make(map[string]*locky.KeepAlive),
+		donec:      make(chan struct{}),
+		ctx:        stopCtx,
+		cancel:     stopCancel,
 	}, nil
 }
 
-func (l *DistributedLock) Lock(lockId string, ttl time.Duration) (bool, error) {
-	return l.LockContext(context.TODO(), lockId, ttl)
-}
-
-func (l *DistributedLock) LockContext(ctx context.Context, lockId string, ttl time.Duration) (bool, error) {
+func (l *DistributedLock) Lock(ctx context.Context, lockId string, ttl time.Duration) (bool, error) {
 	if err := l.validateLockId(lockId); err != nil {
 		return false, err
 	}
@@ -95,17 +108,49 @@ func (l *DistributedLock) LockContext(ctx context.Context, lockId string, ttl ti
 	}
 }
 
-func (l *DistributedLock) Unlock(lockId string) error {
-	return l.UnlockContext(context.TODO(), lockId)
-}
-
-func (l *DistributedLock) UnlockContext(ctx context.Context, lockId string) error {
+func (l *DistributedLock) Unlock(ctx context.Context, lockId string) error {
 	if err := l.validateLockId(lockId); err != nil {
 		return err
 	}
 
 	_, err := l.unlockStat.ExecContext(ctx, lockId, l.Owner)
 	return err
+}
+
+func (l *DistributedLock) KALock(ctx context.Context, lockId string, ttl time.Duration) (bool, <-chan *locky.KeepAliveResponse, error) {
+	locked, err := l.Lock(ctx, lockId, ttl)
+	if err != nil || !locked {
+		return false, nil, err
+	}
+
+	// keepalive the lock after required
+	ch := make(chan *locky.KeepAliveResponse, KeepAliveResponseChannelSize)
+	l.mu.Lock()
+	ka, ok := l.keepAlives[lockId]
+	if !ok {
+		l.keepAlives[lockId] = &locky.KeepAlive{
+			Chs:           make([]chan<- *locky.KeepAliveResponse, 0),
+			Ctxs:          make([]context.Context, 0),
+			NextKeepAlive: time.Now(),
+			Donec:         make(chan struct{}),
+		}
+	} else {
+		ka.Chs = append(ka.Chs, ch)
+		ka.Ctxs = append(ka.Ctxs, ctx)
+	}
+	l.mu.Unlock()
+
+	l.once.Do(func() {
+		l.keepAliveLoop(ka)
+	})
+
+	return true, ch, nil
+}
+
+func (l *DistributedLock) Close() error {
+	close(l.donec)
+	<-l.donec
+	return nil
 }
 
 func (l *DistributedLock) validateLockId(lockId string) error {
@@ -122,6 +167,10 @@ func (l *DistributedLock) validateTTL(ttl time.Duration) error {
 	}
 
 	return nil
+}
+
+func (l *DistributedLock) keepAliveLoop(ka *locky.KeepAlive) {
+
 }
 
 func autoCreate(ctx context.Context, db *sql.DB, table string) error {

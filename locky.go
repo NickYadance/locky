@@ -6,8 +6,9 @@ import (
 )
 
 type DistributedLock interface {
-	Lock(lockId string, ttl time.Duration) (bool, error)
-	LockContext(ctx context.Context, lockId string, ttl time.Duration) (bool, error)
-	Unlock(lockId string) error
-	UnlockContext(ctx context.Context, lockId string) error
+	Lock(ctx context.Context, lockId string, ttl time.Duration) (bool, error)
+	Unlock(ctx context.Context, lockId string) error
+	// KALock Lock with keepalive
+	KALock(ctx context.Context, lockId string, ttl time.Duration) (bool, <-chan *KeepAliveResponse, error)
+	Close() error
 }

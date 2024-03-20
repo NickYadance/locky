@@ -97,12 +97,13 @@ func Test_Lock(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cntC := make(chan int)
 			cnt := 0
+			ctx := context.TODO()
 			var wg sync.WaitGroup
 			for i := 0; i < test.routine; i++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					locked, err := lock.Lock(test.args.lockId, test.args.ttl)
+					locked, err := lock.Lock(ctx, test.args.lockId, test.args.ttl)
 					if (err != nil) != test.wantErr {
 						t.Errorf("Lock error: %v, wantErr: %v", err, test.wantErr)
 						return
@@ -134,7 +135,7 @@ func Test_Lock(t *testing.T) {
 				return
 			}
 
-			locked, err := lock.Lock(test.args.lockId, test.args.ttl)
+			locked, err := lock.Lock(ctx, test.args.lockId, test.args.ttl)
 			if err != nil || locked {
 				t.Errorf("The lock should be owned by others")
 				return
@@ -166,13 +167,13 @@ func Test_Lock(t *testing.T) {
 				}
 			}
 
-			locked, err = lock.Lock(test.args.lockId, test.args.ttl)
+			locked, err = lock.Lock(ctx, test.args.lockId, test.args.ttl)
 			if err != nil || !locked {
 				t.Errorf("The lock should have been outdated")
 				return
 			}
 
-			if err := lock.Unlock(test.args.lockId); err != nil {
+			if err := lock.Unlock(ctx, test.args.lockId); err != nil {
 				t.Errorf("Failed to unlock: %v", err)
 				return
 			}
