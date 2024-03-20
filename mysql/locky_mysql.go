@@ -123,34 +123,38 @@ func (l *DistributedLock) KALock(ctx context.Context, lockId string, ttl time.Du
 		return false, nil, err
 	}
 
-	// keepalive the lock after required
-	ch := make(chan *locky.KeepAliveResponse, KeepAliveResponseChannelSize)
-	l.mu.Lock()
-	ka, ok := l.keepAlives[lockId]
-	if !ok {
-		l.keepAlives[lockId] = &locky.KeepAlive{
-			Chs:           make([]chan<- *locky.KeepAliveResponse, 0),
-			Ctxs:          make([]context.Context, 0),
-			NextKeepAlive: time.Now(),
-			Donec:         make(chan struct{}),
-		}
-	} else {
-		ka.Chs = append(ka.Chs, ch)
-		ka.Ctxs = append(ka.Ctxs, ctx)
-	}
-	l.mu.Unlock()
-
-	l.once.Do(func() {
-		l.keepAliveLoop(ka)
-	})
-
-	return true, ch, nil
+	ch, err := l.keepAlive(ctx, lockId)
+	return locked, ch, err
 }
 
 func (l *DistributedLock) Close() error {
 	close(l.donec)
 	<-l.donec
 	return nil
+}
+
+func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan *locky.KeepAliveResponse, error) {
+	ch := make(chan *locky.KeepAliveResponse, KeepAliveResponseChannelSize)
+	l.mu.Lock()
+	ka, ok := l.keepAlives[lockId]
+	if !ok {
+		l.keepAlives[lockId] = &locky.KeepAlive{
+			Ch:            ch,
+			Ctx:           ctx,
+			NextKeepAlive: time.Now(),
+			Donec:         make(chan struct{}),
+		}
+		l.mu.Unlock()
+	} else {
+		l.mu.Unlock()
+		return ka.Ch, nil
+	}
+
+	l.once.Do(func() {
+		l.keepAliveLoop()
+	})
+
+	return ch, nil
 }
 
 func (l *DistributedLock) validateLockId(lockId string) error {
@@ -169,7 +173,7 @@ func (l *DistributedLock) validateTTL(ttl time.Duration) error {
 	return nil
 }
 
-func (l *DistributedLock) keepAliveLoop(ka *locky.KeepAlive) {
+func (l *DistributedLock) keepAliveLoop() {
 
 }
 
