@@ -12,20 +12,20 @@ import (
 
 type DistributedLock struct {
 	*Opt
-	lockStat, unlockStat *sql.Stmt
-	keepAlives           map[string]*locky.KeepAlive
-	donec                chan struct{}
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	mu                   sync.Mutex
-	once                 sync.Once
+	lockStat, unlockStat, keepAliveStat, ttlStat *sql.Stmt
+	keepAlives                                   map[string]*locky.KeepAlive
+	donec                                        chan struct{}
+	ctx                                          context.Context
+	cancel                                       context.CancelFunc
+	mu                                           sync.Mutex
+	once                                         sync.Once
 }
 
 var _ locky.DistributedLock = &DistributedLock{}
 
 const (
 	DefaultTable = "locky_mysql_distributed_lock"
-	CreateDDL    = "CREATE TABLE if not exists %s" +
+	DDL          = "CREATE TABLE if not exists %s" +
 		"( " +
 		"    `lock_id`     VARCHAR(255)    NOT NULL, " +
 		"    `lock_owner`     VARCHAR(255)    NOT NULL, " +
@@ -39,7 +39,11 @@ const (
 		"ON DUPLICATE KEY UPDATE" +
 		"`lock_timestamp` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_timestamp`), `lock_timestamp`)," +
 		"`lock_ttl` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_ttl`), `lock_ttl`);"
-	QueryUnlock                  = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
+	QueryUnlock    = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
+	QueryKeepAlive = "update %s set " +
+		"`lock_timestamp` = IF(unix_timestamp() - `lock_timestamp` < `lock_ttl`, unix_timestamp(), `lock_timestamp`) " +
+		"where lock_id = ? and lock_owner = ?"
+	QueryTTL                     = "select UNIX_TIMESTAMP() - `lock_timestamp` as ttl from %s where lock_id = ? and lock_owner = ?"
 	KeepAliveResponseChannelSize = 16
 )
 
@@ -69,16 +73,28 @@ func NewMysqlDistributedLock(opt Opt) (*DistributedLock, error) {
 		return nil, err
 	}
 
+	keepAliveStat, err := db.PrepareContext(ctx, fmt.Sprintf(QueryKeepAlive, table))
+	if err != nil {
+		return nil, err
+	}
+
+	ttlStat, err := db.PrepareContext(ctx, fmt.Sprintf(QueryTTL, table))
+	if err != nil {
+		return nil, err
+	}
+
 	stopCtx, stopCancel := context.WithCancel(ctx)
 
 	return &DistributedLock{
-		Opt:        &opt,
-		lockStat:   lockStat,
-		unlockStat: unlockStat,
-		keepAlives: make(map[string]*locky.KeepAlive),
-		donec:      make(chan struct{}),
-		ctx:        stopCtx,
-		cancel:     stopCancel,
+		Opt:           &opt,
+		lockStat:      lockStat,
+		unlockStat:    unlockStat,
+		keepAliveStat: keepAliveStat,
+		ttlStat:       ttlStat,
+		keepAlives:    make(map[string]*locky.KeepAlive),
+		donec:         make(chan struct{}),
+		ctx:           stopCtx,
+		cancel:        stopCancel,
 	}, nil
 }
 
@@ -150,6 +166,8 @@ func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan 
 		return ka.Ch, nil
 	}
 
+	go l.keepAliveContextCloser(ka)
+
 	l.once.Do(func() {
 		l.keepAliveLoop()
 	})
@@ -173,11 +191,87 @@ func (l *DistributedLock) validateTTL(ttl time.Duration) error {
 	return nil
 }
 
+func (l *DistributedLock) keepAliveContextCloser(ka *locky.KeepAlive) {
+	select {
+	case <-ka.Donec:
+	case <-ka.Ctx.Done():
+		l.closeKeepAlive(ka)
+	}
+}
+
 func (l *DistributedLock) keepAliveLoop() {
+	for {
+		var toSend []*locky.KeepAlive
+		l.mu.Lock()
+		for _, ka := range l.keepAlives {
+			if time.Now().After(ka.NextKeepAlive) {
+				toSend = append(toSend, ka)
+			}
+		}
+		l.mu.Unlock()
+
+		for _, ka := range toSend {
+			karesp := l.sendKeepAlive(ka)
+			select {
+			case ka.Ch <- karesp:
+			default:
+			}
+
+			if errors.Is(karesp.Err, ErrLockExpired) {
+				l.closeKeepAlive(ka)
+			}
+
+			ka.NextKeepAlive = time.Now().Add(karesp.TTL / 3)
+		}
+
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-l.donec:
+			return
+		}
+	}
 
 }
 
+func (l *DistributedLock) sendKeepAlive(ka *locky.KeepAlive) *locky.KeepAliveResponse {
+	karesp := &locky.KeepAliveResponse{}
+	result, err := l.keepAliveStat.ExecContext(ka.Ctx, ka.LockId, l.Owner)
+	if err != nil {
+		karesp.Err = err
+		return karesp
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		karesp.Err = err
+		return karesp
+	}
+
+	if rowsAffected == 0 {
+		karesp.Err = ErrLockExpired
+		return karesp
+	}
+
+	var ttl int64
+	row := l.ttlStat.QueryRowContext(ka.Ctx, ka.LockId, l.Owner)
+	if err := row.Scan(&ttl); err != nil {
+		karesp.Err = err
+		return karesp
+	}
+
+	karesp.TTL = time.Duration(ttl) * time.Second
+	karesp.Err = nil
+	return karesp
+}
+
+func (l *DistributedLock) closeKeepAlive(ka *locky.KeepAlive) {
+	ka.Close()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.keepAlives, ka.LockId)
+}
+
 func autoCreate(ctx context.Context, db *sql.DB, table string) error {
-	_, err := db.ExecContext(ctx, fmt.Sprintf(CreateDDL, table))
+	_, err := db.ExecContext(ctx, fmt.Sprintf(DDL, table))
 	return err
 }
