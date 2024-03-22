@@ -160,12 +160,14 @@ func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan 
 	l.mu.Lock()
 	ka, ok := l.keepAlives[lockId]
 	if !ok {
-		l.keepAlives[lockId] = &locky.KeepAlive{
+		ka = &locky.KeepAlive{
+			LockId:        lockId,
 			Ch:            ch,
 			Ctx:           ctx,
 			NextKeepAlive: time.Now(),
 			Donec:         make(chan struct{}),
 		}
+		l.keepAlives[lockId] = ka
 		l.mu.Unlock()
 	} else {
 		l.mu.Unlock()
@@ -175,8 +177,8 @@ func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan 
 	go l.keepAliveContextCloser(ka)
 
 	l.once.Do(func() {
-		l.keepAliveLoop()
-		l.deadlineLoop()
+		go l.keepAliveLoop()
+		go l.deadlineLoop()
 	})
 
 	return ch, nil
@@ -233,9 +235,11 @@ func (l *DistributedLock) keepAliveLoop() {
 				l.mu.Lock()
 				delete(l.keepAlives, ka.LockId)
 				l.mu.Unlock()
+				continue
 			}
 
 			ka.NextKeepAlive = time.Now().Add(karesp.TTL / 3)
+			ka.Deadline = time.Now().Add(karesp.TTL)
 		}
 
 		select {

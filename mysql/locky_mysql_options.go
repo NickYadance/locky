@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"math/rand"
-	"time"
+	"github.com/google/uuid"
+	"strings"
 )
 
 type Opt struct {
@@ -24,7 +24,7 @@ func (o *Opt) Complete() *Opt {
 		o.Ctx = context.Background()
 	}
 	if len(o.Owner) == 0 {
-		o.Owner = generateRandomString(16)
+		o.Owner = strings.ReplaceAll(uuid.NewString(), "-", "")
 	}
 	return o
 }
@@ -47,17 +47,4 @@ func (o *Opt) Validate() error {
 	}
 
 	return nil
-}
-
-func generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-	randomString := make([]byte, length)
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	for i := 0; i < length; i++ {
-		randomString[i] = charset[rand.Intn(len(charset))]
-	}
-
-	return string(randomString)
 }
