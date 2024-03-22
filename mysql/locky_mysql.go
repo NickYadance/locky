@@ -145,6 +145,12 @@ func (l *DistributedLock) KALock(ctx context.Context, lockId string, ttl time.Du
 
 func (l *DistributedLock) Close() error {
 	close(l.donec)
+	l.mu.Lock()
+	for _, ka := range l.keepAlives {
+		ka.Close()
+	}
+	l.keepAlives = make(map[string]*locky.KeepAlive)
+	l.mu.Unlock()
 	<-l.donec
 	return nil
 }
@@ -170,6 +176,7 @@ func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan 
 
 	l.once.Do(func() {
 		l.keepAliveLoop()
+		l.deadlineLoop()
 	})
 
 	return ch, nil
@@ -193,9 +200,13 @@ func (l *DistributedLock) validateTTL(ttl time.Duration) error {
 
 func (l *DistributedLock) keepAliveContextCloser(ka *locky.KeepAlive) {
 	select {
+	case <-l.donec:
 	case <-ka.Donec:
 	case <-ka.Ctx.Done():
-		l.closeKeepAlive(ka)
+		ka.Close()
+		l.mu.Lock()
+		delete(l.keepAlives, ka.LockId)
+		l.mu.Unlock()
 	}
 }
 
@@ -218,7 +229,10 @@ func (l *DistributedLock) keepAliveLoop() {
 			}
 
 			if errors.Is(karesp.Err, ErrLockExpired) {
-				l.closeKeepAlive(ka)
+				ka.Close()
+				l.mu.Lock()
+				delete(l.keepAlives, ka.LockId)
+				l.mu.Unlock()
 			}
 
 			ka.NextKeepAlive = time.Now().Add(karesp.TTL / 3)
@@ -264,11 +278,26 @@ func (l *DistributedLock) sendKeepAlive(ka *locky.KeepAlive) *locky.KeepAliveRes
 	return karesp
 }
 
-func (l *DistributedLock) closeKeepAlive(ka *locky.KeepAlive) {
-	ka.Close()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.keepAlives, ka.LockId)
+func (l *DistributedLock) deadlineLoop() {
+	for {
+		select {
+		case <-time.After(time.Second):
+		case <-l.donec:
+			return
+		}
+		l.mu.Lock()
+		for _, ka := range l.keepAlives {
+			if time.Now().After(ka.Deadline) {
+				select {
+				case ka.Ch <- &locky.KeepAliveResponse{Err: ErrDeadlineReached}:
+				default:
+				}
+				ka.Close()
+				delete(l.keepAlives, ka.LockId)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func autoCreate(ctx context.Context, db *sql.DB, table string) error {

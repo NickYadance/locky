@@ -12,6 +12,7 @@ type KeepAlive struct {
 	Ch            chan *KeepAliveResponse
 	Ctx           context.Context
 	NextKeepAlive time.Time
+	Deadline      time.Time
 	Donec         chan struct{}
 }
 
