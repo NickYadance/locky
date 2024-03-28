@@ -225,7 +225,6 @@ func (l *DistributedLock) keepAliveLoop() {
 		var toSend []*locky.KeepAlive
 		l.mu.Lock()
 		for _, ka := range l.keepAlives {
-			//log.Printf("NextKeepAlive: %+v, after: %v\n", ka.NextKeepAlive, time.Now().After(ka.NextKeepAlive))
 			if time.Now().After(ka.NextKeepAlive) {
 				toSend = append(toSend, ka)
 			}
