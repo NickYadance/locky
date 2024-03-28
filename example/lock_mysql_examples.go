@@ -28,7 +28,7 @@ func lock() {
 		log.Fatal(err)
 	}
 
-	lockId := "lock2024"
+	lockId := "lock"
 	locked, err := lock.Lock(context.TODO(), lockId, 3*time.Second)
 	if err != nil {
 		panic(err)
@@ -52,10 +52,10 @@ func kalock() {
 		log.Fatal(err)
 	}
 
-	lockId := "kalock2024"
+	lockId := "kalock"
 	locked, ch, err := lock.KALock(context.TODO(), lockId, 6*time.Second)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	if locked {
@@ -71,7 +71,7 @@ func kalock() {
 				if !ok {
 					return
 				}
-				fmt.Printf("remain ttl: %dms, err: %v\n", karesp.TTL.Milliseconds(), karesp.Err)
+				fmt.Printf("ttl: %dms, err: %v\n", karesp.TTL.Milliseconds(), karesp.Err)
 			}
 		}
 	}

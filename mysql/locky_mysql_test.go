@@ -47,7 +47,7 @@ func Test_NewMysqlDistributedLock(t *testing.T) {
 		{name: "empty options", args: args{}, wantErr: true},
 		{name: "autoCreate", args: args{db: db, autoCreate: true}, wantErr: false},
 		{name: "custom table", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true}, wantErr: false},
-		{name: "custom owner", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: true, owner: "custom_owner"}, wantErr: false},
+		{name: "custom owner", args: args{db: db, table: "custom_lock_table", ctx: context.Background(), autoCreate: false, owner: "custom_owner"}, wantErr: false},
 	}
 
 	for _, test := range tests {
