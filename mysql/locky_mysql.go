@@ -36,14 +36,15 @@ const (
 		"  DEFAULT CHARSET = utf8;"
 	QueryLock = "INSERT INTO %s (`lock_id`, `lock_owner`, `lock_timestamp`, `lock_ttl`)" +
 		"VALUES (?, ?, UNIX_TIMESTAMP(), ?)" +
-		"ON DUPLICATE KEY UPDATE" +
-		"`lock_timestamp` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_timestamp`), `lock_timestamp`)," +
-		"`lock_ttl` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_ttl`), `lock_ttl`);"
+		"ON DUPLICATE KEY UPDATE " +
+		"`lock_owner` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_owner`), `lock_owner`)," +
+		"`lock_ttl` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_ttl`), `lock_ttl`)," +
+		"`lock_timestamp` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_timestamp`), `lock_timestamp`)"
 	QueryUnlock    = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
 	QueryKeepAlive = "update %s set " +
 		"`lock_timestamp` = IF(unix_timestamp() - `lock_timestamp` < `lock_ttl`, unix_timestamp(), `lock_timestamp`) " +
 		"where lock_id = ? and lock_owner = ?"
-	QueryTTL                     = "select UNIX_TIMESTAMP() - `lock_timestamp` as ttl from %s where lock_id = ? and lock_owner = ?"
+	QueryTTL                     = "select `lock_timestamp` + `lock_ttl` - UNIX_TIMESTAMP() as ttl_remain from %s where lock_id = ? and lock_owner = ?"
 	KeepAliveResponseChannelSize = 16
 )
 
@@ -139,7 +140,7 @@ func (l *DistributedLock) KALock(ctx context.Context, lockId string, ttl time.Du
 		return false, nil, err
 	}
 
-	ch, err := l.keepAlive(ctx, lockId)
+	ch, err := l.keepAlive(ctx, lockId, ttl)
 	return locked, ch, err
 }
 
@@ -155,7 +156,23 @@ func (l *DistributedLock) Close() error {
 	return nil
 }
 
-func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan *locky.KeepAliveResponse, error) {
+func (l *DistributedLock) validateLockId(lockId string) error {
+	if len(lockId) <= 0 || len(lockId) > 255 {
+		return errors.New("lockId len must be between 0-255")
+	}
+
+	return nil
+}
+
+func (l *DistributedLock) validateTTL(ttl time.Duration) error {
+	if ttl <= 0 {
+		return errors.New("ttl must be non-zero value")
+	}
+
+	return nil
+}
+
+func (l *DistributedLock) keepAlive(ctx context.Context, lockId string, ttl time.Duration) (<-chan *locky.KeepAliveResponse, error) {
 	ch := make(chan *locky.KeepAliveResponse, KeepAliveResponseChannelSize)
 	l.mu.Lock()
 	ka, ok := l.keepAlives[lockId]
@@ -164,7 +181,9 @@ func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan 
 			LockId:        lockId,
 			Ch:            ch,
 			Ctx:           ctx,
+			TTL:           ttl,
 			NextKeepAlive: time.Now(),
+			Deadline:      time.Now().Add(ttl),
 			Donec:         make(chan struct{}),
 		}
 		l.keepAlives[lockId] = ka
@@ -184,22 +203,6 @@ func (l *DistributedLock) keepAlive(ctx context.Context, lockId string) (<-chan 
 	return ch, nil
 }
 
-func (l *DistributedLock) validateLockId(lockId string) error {
-	if len(lockId) <= 0 || len(lockId) > 255 {
-		return errors.New("lockId len must be between 0-255")
-	}
-
-	return nil
-}
-
-func (l *DistributedLock) validateTTL(ttl time.Duration) error {
-	if ttl <= 0 {
-		return errors.New("ttl must be non-zero value")
-	}
-
-	return nil
-}
-
 func (l *DistributedLock) keepAliveContextCloser(ka *locky.KeepAlive) {
 	select {
 	case <-l.donec:
@@ -217,6 +220,7 @@ func (l *DistributedLock) keepAliveLoop() {
 		var toSend []*locky.KeepAlive
 		l.mu.Lock()
 		for _, ka := range l.keepAlives {
+			//log.Printf("NextKeepAlive: %+v, after: %v\n", ka.NextKeepAlive, time.Now().After(ka.NextKeepAlive))
 			if time.Now().After(ka.NextKeepAlive) {
 				toSend = append(toSend, ka)
 			}
@@ -270,14 +274,7 @@ func (l *DistributedLock) sendKeepAlive(ka *locky.KeepAlive) *locky.KeepAliveRes
 		return karesp
 	}
 
-	var ttl int64
-	row := l.ttlStat.QueryRowContext(ka.Ctx, ka.LockId, l.Owner)
-	if err := row.Scan(&ttl); err != nil {
-		karesp.Err = err
-		return karesp
-	}
-
-	karesp.TTL = time.Duration(ttl) * time.Second
+	karesp.TTL = ka.TTL
 	karesp.Err = nil
 	return karesp
 }

@@ -24,6 +24,9 @@ func lock() {
 	lock, err := mysql.NewMysqlDistributedLock(mysql.Opt{
 		Db: db,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	lockId := "lock2024"
 	locked, err := lock.Lock(context.TODO(), lockId, 3*time.Second)
@@ -45,6 +48,9 @@ func kalock() {
 	lock, err := mysql.NewMysqlDistributedLock(mysql.Opt{
 		Db: db,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	lockId := "kalock2024"
 	locked, ch, err := lock.KALock(context.TODO(), lockId, 3*time.Second)
@@ -54,15 +60,19 @@ func kalock() {
 
 	if locked {
 		defer func() {
-			if err := lock.Unlock(context.TODO(), lockId); err != nil {
-				log.Fatal(err)
-			}
+			//if err := lock.Unlock(context.TODO(), lockId); err != nil {
+			//	log.Fatal(err)
+			//}
 		}()
 		fmt.Printf("%s acquired\n", lockId)
-		select {
-		case karesp := <-ch:
-			fmt.Printf("remain ttl: %d, err: %v\n", karesp.TTL, karesp.Err)
-		case <-time.After(10 * time.Second):
+		for {
+			select {
+			case karesp, ok := <-ch:
+				if !ok {
+					return
+				}
+				fmt.Printf("remain ttl: %f, err: %v\n", karesp.TTL.Seconds(), karesp.Err)
+			}
 		}
 	}
 }

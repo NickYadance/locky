@@ -9,6 +9,7 @@ import (
 // github.com/coreos/etcd@v3.3.13/clientv3/lease.go
 type KeepAlive struct {
 	LockId        string
+	TTL           time.Duration
 	Ch            chan *KeepAliveResponse
 	Ctx           context.Context
 	NextKeepAlive time.Time
