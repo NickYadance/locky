@@ -25,26 +25,31 @@ var _ locky.DistributedLock = &DistributedLock{}
 
 const (
 	DefaultTable = "locky_mysql_distributed_lock"
-	DDL          = "CREATE TABLE if not exists %s" +
-		"( " +
-		"    `lock_id`     VARCHAR(255)    NOT NULL, " +
-		"    `lock_owner`     VARCHAR(255)    NOT NULL, " +
-		"    `lock_timestamp` BIGINT UNSIGNED NOT NULL, " +
-		"    `lock_ttl`       INT UNSIGNED    NOT NULL, " +
-		"    PRIMARY KEY (`lock_id`) " +
-		") ENGINE = InnoDB " +
-		"  DEFAULT CHARSET = utf8;"
-	QueryLock = "INSERT INTO %s (`lock_id`, `lock_owner`, `lock_timestamp`, `lock_ttl`)" +
-		"VALUES (?, ?, UNIX_TIMESTAMP(), ?)" +
-		"ON DUPLICATE KEY UPDATE " +
-		"`lock_owner` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_owner`), `lock_owner`)," +
-		"`lock_ttl` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_ttl`), `lock_ttl`)," +
-		"`lock_timestamp` = IF(UNIX_TIMESTAMP() - `lock_timestamp` > `lock_ttl`, VALUES(`lock_timestamp`), `lock_timestamp`)"
-	QueryUnlock    = "DELETE FROM %s WHERE `lock_id` = ? and `lock_owner` = ?;"
-	QueryKeepAlive = "update %s set " +
-		"`lock_timestamp` = IF(unix_timestamp() - `lock_timestamp` < `lock_ttl`, unix_timestamp(), `lock_timestamp`) " +
-		"where lock_id = ? and lock_owner = ?"
-	QueryTTL                     = "select `lock_timestamp` + `lock_ttl` - UNIX_TIMESTAMP() as ttl_remain from %s where lock_id = ? and lock_owner = ?"
+	DDL          = `
+create table %s
+(
+    lock_id      varchar(255)    not null primary key,
+    lock_owner     varchar(255)    not null,
+    lock_timestamp bigint unsigned not null,
+    lock_ttl       int unsigned    not null
+);`
+	QueryLock = `
+INSERT INTO %s (lock_id, lock_owner, lock_timestamp, lock_ttl)
+VALUES (?, ?, UNIX_TIMESTAMP(now(3)) * 1000, ?)
+ON DUPLICATE KEY UPDATE lock_owner     = IF(VALUES(lock_timestamp) - lock_timestamp > lock_ttl,
+                                              VALUES(lock_owner), lock_owner),
+                        lock_ttl       = IF(VALUES(lock_timestamp) - lock_timestamp > lock_ttl,
+                                              VALUES(lock_ttl), lock_ttl),
+                        lock_timestamp = IF(VALUES(lock_timestamp) - lock_timestamp > lock_ttl,
+                                              VALUES(lock_timestamp), lock_timestamp);
+`
+	QueryUnlock    = `DELETE FROM %s WHERE lock_id = ? and lock_owner = ?`
+	QueryKeepAlive = ` 
+		update %s set
+		lock_timestamp = IF(UNIX_TIMESTAMP(now(3)) * 1000 - lock_timestamp < lock_ttl, UNIX_TIMESTAMP(now(3)) * 1000 + 1, lock_timestamp)
+		where lock_id = ? and lock_owner = ?
+		`
+	QueryTTL                     = `select lock_timestamp + lock_ttl - UNIX_TIMESTAMP(now(3)) * 1000 as ttl_remain from %s where lock_id = ? and lock_owner = ?`
 	KeepAliveResponseChannelSize = 16
 )
 
@@ -108,7 +113,7 @@ func (l *DistributedLock) Lock(ctx context.Context, lockId string, ttl time.Dura
 		return false, err
 	}
 
-	res, err := l.lockStat.ExecContext(ctx, lockId, l.Owner, ttl.Seconds())
+	res, err := l.lockStat.ExecContext(ctx, lockId, l.Owner, ttl.Milliseconds())
 	if err != nil {
 		return false, err
 	}
